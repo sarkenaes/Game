@@ -1,8 +1,7 @@
-
 %include "/usr/local/share/csc314/asm_io.inc"
 
 ; the file that stores the initial state
-%define BOARD_FILE 'board.txt'
+%define BOARD_FILE 'boards.txt'
 
 ; how to represent everything
 %define WALL_CHAR '#'
@@ -60,6 +59,10 @@ segment .data
                 teleporter db 0xF0, 0x9F, 0x8C, 0x80, 0
                         ; this line stores a message in the memory
                         coin_time db "All 5 coins collected in %d seconds!" , 10,0
+
+;Message if the monster catches the player
+	game_over_msg db 13,10, "Game over! You got caught by the big bad monster.",13,10,0
+
 segment .bss
 
         ; this array stores the current rendered gameboard (HxW)
@@ -72,6 +75,11 @@ segment .bss
         ;variables for time
                 start_time resd 1
                 elapsed_seconds resd 1
+
+		;variables for the monster
+		monster_x resd 1
+		monster_y resd 1
+
 segment .text
 
         global  asm_main
@@ -96,6 +104,11 @@ asm_main:
         push    ebp
         mov             ebp, esp
 
+		push ebx
+		push esi
+		push edi
+
+
         ; put the terminal in raw mode so the game works nicely
         call    raw_mode_on
 
@@ -114,6 +127,11 @@ asm_main:
         ; set the player at the proper start position
         mov             DWORD [xpos], STARTX
         mov             DWORD [ypos], STARTY
+
+		;set the monster's starting position
+		mov 		DWORD[monster_x], 20
+		mov 		DWORD[monster_y], 10
+
 
         ; the game happens in this loop
         ; the steps are...
@@ -182,36 +200,277 @@ asm_main:
                         ; opps, that was an invalid move, reset
                         mov             DWORD [xpos], esi
                         mov             DWORD [ypos], edi
+
                 valid_move:
                                 cmp BYTE[eax],'T'
                                 je teleport
                                 cmp     BYTE [eax], coin_char
-                jne     game_loop
+                				jne     monster_turn
 
                 mov     BYTE [eax], empty_char
                 inc     DWORD [coinscollected]
                                 cmp     DWORD [coinscollected], coin_count
-                        jne     game_loop
+                        jne     monster_turn
                                 ;below is how we calculate the current time
                     push    0
                         call    time
                         add     esp, 4
                         sub     eax, DWORD [start_time]
                         mov     DWORD [elapsed_seconds], eax
-                        jmp     game_loop
+                        jmp     monster_turn
                 teleport:
                         mov     DWORD [xpos], STARTX
                         mov     DWORD [ypos], STARTY
-                        jmp     game_loop
+                        jmp     monster_turn
+
+
+				monster_turn:
+					call monster_move     ;to move the monster
+					cmp eax, 1				;to check if the monster caught the player
+					je game_over
+					jmp game_loop			;game continues if the player is still alive
+
+				game_over:
+					mov eax, game_over_msg
+					call print_string
+					add esp, 4
+					jmp game_loop_end
+
         game_loop_end:
 
         ; restore old terminal functionality
         call raw_mode_off
 
         mov             eax, 0
+
+		lea esp, [ebp-12]
+		pop edi
+		pop esi
+		pop ebx
+
         mov             esp, ebp
         pop             ebp
         ret
+
+
+;---------------------------------------------------------------------------------------
+;We are moving the moster one square at a time randomly.
+;if the monster catches the player the game is over(the player failed)
+;monster_move   ;the function
+;return eax= 1 if the player was caught
+;		eax = 0 if the player was not caught
+
+
+monster_move:
+	push ebp
+	mov ebp, esp
+	sub esp, 8
+
+	;save the resigsters used by this function
+	push ebx
+	push ecx
+	push edx
+	push esi
+	push edi
+
+	;save current monsters position
+	mov eax, DWORD [monster_x]
+	mov DWORD [ebp-4], eax
+
+	mov eax, DWORD [monster_y]
+	mov DWORD [ebp - 8], eax
+
+	;generate random directions
+	call rand
+
+	mov edx, 0
+	mov ecx, 4
+	div ecx			;edx holds the reminder 0-3
+
+	cmp edx, 0
+	je monster_up
+
+	cmp edx, 1
+	je monster_down
+
+	cmp edx, 2
+	je monster_left
+
+	cmp edx, 3
+	je monster_right
+
+monster_up:
+	dec DWORD [monster_y]
+	jmp check_monster_move
+
+monster_down:
+	inc DWORD [monster_y]
+	jmp check_monster_move
+
+monster_left:
+	dec DWORD [monster_x]
+	jmp check_monster_move
+
+monster_right:
+	inc DWORD [monster_x]
+	jmp check_monster_move
+
+check_monster_move:
+	;check boundaries
+	cmp DWORD [monster_x], 0
+	jl monster_invalid_move
+
+	cmp DWORD [monster_x], WIDTH
+	jge monster_invalid_move
+
+	cmp DWORD [monster_y],0
+	jl monster_invalid_move
+
+	cmp DWORD [monster_y], HEIGHT
+	jge monster_invalid_move
+
+	;check board index
+    mov eax, DWORD [monster_y]
+    mov ebx, WIDTH
+    mul ebx
+    add eax, DWORD [monster_x]
+
+    ; Check for wall
+    cmp BYTE [board + eax], WALL_CHAR
+    je monster_invalid_move
+
+    jmp check_caught
+
+monster_invalid_move:
+
+	;restore monsters to old position
+	mov eax, DWORD [ebp - 4]
+	mov DWORD [monster_x], eax
+
+	mov eax, DWORD [ebp-8]
+	mov DWORD [monster_y], eax
+
+check_caught:
+	;calculate absolute X distacne
+	mov eax, DWORD [xpos]
+	sub eax, DWORD [monster_x]
+
+	cmp eax, 0
+	jge x_distance_positive
+
+	neg eax
+
+x_distance_positive:
+	mov esi, eax
+
+	;calculate absolute Y distance 
+	mov eax, DWORD [ypos]
+	sub eax, DWORD [monster_y]
+
+	cmp eax, 0
+	jge y_distance_positive
+
+	neg eax
+
+y_distance_positive:
+	;distance = abs(x difference) + abs(y difference)
+	add eax, esi
+
+	;if distance <= 1, player is caught
+	cmp eax, 1
+	jle player_caught
+
+	;player is safe
+	mov eax, 0
+	jmp monster_move_end
+
+player_caught:
+	mov eax, 1
+
+monster_move_end:
+
+	;restore preserved registers
+	pop edi
+	pop esi
+	pop edx
+	pop ecx
+	pop ebx
+
+
+	mov esp, ebp
+	pop ebp
+	ret
+
+;---------------------------------------------------------------------------------
+;limted vision
+;tha player can only see 3 steps in all directions
+;sight_check
+;returns eax = 1 if tile is visible
+;eax = 0 if tiles is hidden
+
+sight_check:
+    push ebp
+    mov ebp, esp
+
+    push esi
+    push edi
+
+    ; Coordinates passed by render
+    mov esi, DWORD [ebp+8]     ; tile x
+    mov edi, DWORD [ebp+12]    ; tile y
+
+    ; Always make border tiles visible
+    cmp esi, 0
+    je sight_visible
+
+    cmp esi, WIDTH-1
+    je sight_visible
+
+    cmp edi, 0
+    je sight_visible
+
+    cmp edi, HEIGHT-1
+    je sight_visible
+
+    ; abs(tile_x - player_x)
+    mov eax, esi
+    sub eax, DWORD [xpos]
+
+    cmp eax, 0
+    jge sight_x_done
+    neg eax
+
+sight_x_done:
+    cmp eax, 2
+    jg sight_hidden
+
+    ; abs(tile_y - player_y)
+    mov eax, edi
+    sub eax, DWORD [ypos]
+
+    cmp eax, 0
+    jge sight_y_done
+    neg eax
+
+sight_y_done:
+    cmp eax, 2
+    jg sight_hidden
+
+sight_visible:
+    mov eax, 1
+    jmp sight_exit
+
+sight_hidden:
+    mov eax, 0
+
+sight_exit:
+    pop edi
+    pop esi
+
+    mov esp, ebp
+    pop ebp
+    ret
+
 
 raw_mode_on:
 
@@ -325,18 +584,61 @@ render:
                 cmp             DWORD [ebp - 8], WIDTH
                 je              x_loop_end
 
-                        ; check if (xpos,ypos)=(x,y)
-                        mov             eax, DWORD [xpos]
-                        cmp             eax, DWORD [ebp - 8]
-                        jne             print_board
-                        mov             eax, DWORD [ypos]
-                        cmp             eax, DWORD [ebp - 4]
-                        jne             print_board
-                                ; if both were equal, print the player
-                                push    PLAYER_CHAR
-                                call    putchar
-                                add             esp, 4
-                                jmp             pad
+                        ; check if the current tile is the player's position
+
+						mov eax, DWORD [xpos]
+						cmp eax, DWORD [ebp - 8]
+						jne check_visibility
+
+						mov eax, DWORD [ypos]
+						cmp eax, DWORD [ebp - 4]
+						jne check_visibility
+
+						; Print the player
+						push PLAYER_CHAR
+						call putchar
+						add esp, 4
+
+						jmp pad
+
+
+						;check wether the current tile is visble
+						check_visibility:
+						;pass tile coordinates to sight_check
+						push DWORD [ebp - 4]   ;tile y
+						push DWORD [ebp - 8] 	; tile x
+
+						call sight_check
+						add esp, 8
+
+						cmp eax, 1			;if tile visible render it
+						je print_monster_check
+
+						push '?'			;otherwise print hidden title
+						call putchar
+						add esp, 4
+
+						jmp pad
+
+
+
+
+						;check whether this square contains the monster
+						print_monster_check:
+								mov eax, DWORD [monster_x]
+								cmp eax, DWORD [ebp - 8]
+								jne print_board
+
+								mov eax, DWORD [monster_y]
+								cmp eax, DWORD [ebp - 4]
+								jne print_board
+
+								push 'M'
+								call putchar
+								add esp, 4
+								jmp pad
+
+
                         print_board:
                                 ; otherwise print whatever's in the buffer
                                 mov             eax, DWORD [ebp - 4]

@@ -1,10 +1,10 @@
-NAME=finalproject
+NAME=game
 
-all: finalproject
+all: game
 
 clean:
-        rm -rf finalproject finalproject.o
+	rm -rf game game.o
 
-finalproject: finalproject.asm
-        nasm -f elf -F dwarf -g finalproject.asm
-        gcc -no-pie -g -m32 -znoexecstack -o finalproject finalproject.o /usr/local/share/csc314/driver.c /usr/local/share/csc314/asm_io.o
+game: game.asm
+	nasm -f elf -F dwarf -g game.asm
+	gcc -no-pie -g -m32 -znoexecstack -o game game.o /usr/local/share/csc314/driver.c /usr/local/share/csc314/asm_io.o
